@@ -2,6 +2,8 @@ from dataclasses import dataclass, field
 from datetime import timedelta
 from typing import Optional, Any
 import logging
+import os
+from urllib.parse import quote
 
 import httpx
 
@@ -19,6 +21,7 @@ from open_storyline.mcp.sampling_handler import make_sampling_callback
 from open_storyline.skills.skills_io import load_skills
 
 logger = logging.getLogger(__name__)
+OPENAI_URL = "https://api.openai.com/v1"
 
 async def validate_api_key(base_url: str, api_key: str, model: str, provider: str = "LLM", timeout: float = 10.0) -> bool:
     """
@@ -44,17 +47,19 @@ async def validate_api_key(base_url: str, api_key: str, model: str, provider: st
     
     try:
         async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
+            official_gpt = base_url == OPENAI_URL and model.startswith("gpt-6")
+            if official_gpt:
+                response = await client.get(f"{base_url}/models/{quote(model, safe='')}", headers=headers)
+            else:
+                response = await client.post(f"{base_url}/chat/completions", headers=headers, json=payload)
             
             if response.status_code == 200:
                 try:
                     data = response.json()
                 except Exception:
                     raise ValueError(f"{provider} returned non-JSON response. Check base_url/gateway.")
+                if official_gpt and data.get("id") == model:
+                    return True
                 choices = data.get("choices")
                 if isinstance(choices, list) and len(choices) > 0:
                     print(f"{model} validation successful")
@@ -143,6 +148,16 @@ class ClientContext:
     lang: str = "zh" # Default language: Chinese
 
 
+def _model_options(model: str, base_url: str, temperature: Optional[float]) -> dict:
+    if base_url == OPENAI_URL and model.startswith("gpt-6"):
+        return {
+            "use_responses_api": True,
+            "reasoning": {"effort": "low"},
+            "model_kwargs": {"store": False},
+        }
+    return {"temperature": temperature}
+
+
 async def build_agent(
     cfg: Settings,
     session_id: str,
@@ -167,6 +182,11 @@ async def build_agent(
     llm_temperature = _get(llm_override, "temperature", cfg.llm.temperature)
     llm_max_retries = _get(llm_override, "max_retries", cfg.llm.max_retries)
 
+    managed_key = os.getenv("STORYLINE_OPENAI_API_KEY", "").strip()
+    if managed_key and not any((llm_model, llm_base_url, llm_api_key)):
+        llm_model, llm_base_url, llm_api_key = "gpt-6.1-terra", OPENAI_URL, managed_key
+    llm_options = _model_options(llm_model, llm_base_url, llm_temperature)
+
     # Validate LLM API key before creating the model
     await validate_api_key(llm_base_url, llm_api_key, llm_model, "LLM", llm_timeout)
 
@@ -179,7 +199,7 @@ async def build_agent(
             "Content-Type": "application/json",
         },
         timeout=llm_timeout,
-        temperature=llm_temperature,
+        **llm_options,
         streaming=True,
         max_retries=llm_max_retries,
     )
@@ -191,6 +211,10 @@ async def build_agent(
     vlm_timeout = _get(vlm_override, "timeout", cfg.vlm.timeout)
     vlm_temperature = _get(vlm_override, "temperature", cfg.vlm.temperature)
     vlm_max_retries = _get(vlm_override, "max_retries", cfg.vlm.max_retries)
+
+    if managed_key and not any((vlm_model, vlm_base_url, vlm_api_key)):
+        vlm_model, vlm_base_url, vlm_api_key = "gpt-6-luna", OPENAI_URL, managed_key
+    vlm_options = _model_options(vlm_model, vlm_base_url, vlm_temperature)
 
     # Validate VLM API key before creating the model
     await validate_api_key(vlm_base_url, vlm_api_key, vlm_model, "VLM", vlm_timeout)
@@ -204,7 +228,7 @@ async def build_agent(
             "Content-Type": "application/json",
         },
         timeout=vlm_timeout,
-        temperature=vlm_temperature,
+        **vlm_options,
         max_retries=vlm_max_retries,
     )
 

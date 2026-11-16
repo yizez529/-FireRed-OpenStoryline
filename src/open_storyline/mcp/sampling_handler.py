@@ -395,10 +395,17 @@ def make_sampling_callback(
             # 7. Invoke selected model
             bound = model
             model_name = getattr(model, "model", None) or getattr(model, "model_name", None) or "unknown"
-            try:
-                bound = bound.bind(temperature=temperature, max_tokens=max_tokens, top_p=top_p)
-            except Exception:
-                bound = bound.bind(temperature=temperature, max_tokens=max_tokens)
+            uses_gpt_responses = (
+                getattr(model, "use_responses_api", False)
+                and str(model_name).startswith("gpt-6")
+            )
+            if uses_gpt_responses:
+                bound = model.bind(max_tokens=max_tokens)
+            else:
+                try:
+                    bound = model.bind(temperature=temperature, max_tokens=max_tokens, top_p=top_p)
+                except Exception:
+                    bound = model.bind(temperature=temperature, max_tokens=max_tokens)
 
             try:
                 if hasattr(bound, "ainvoke"):
@@ -406,6 +413,8 @@ def make_sampling_callback(
                 else:
                     resp = await asyncio.to_thread(bound.invoke, lc_messages)
             except TypeError:
+                if uses_gpt_responses:
+                    raise
                 # Edge case: some wrappers don't accept max_tokens/top_p
                 bound2 = model.bind(temperature=temperature)
                 if hasattr(bound2, "ainvoke"):
