@@ -350,3 +350,7 @@ This project is licensed under the Apache License 2.0 - see the [LICENSE](LICENS
 ## ⭐ Star History
 
 <div align="center"> <p> <img width="800" src="https://api.star-history.com/svg?repos=FireRedTeam/FireRed-OpenStoryline&type=Date" alt="Star-history"> </p> </div>
+
+### OpenAI model profile
+
+To use the OpenAI profile, set the environment secret `STORYLINE_OPENAI_API_KEY` and leave the relevant LLM and VLM model, URL and key settings blank. This selects GPT-6.1 Terra for editing decisions and GPT-6 Luna for frame understanding via the OpenAI Responses API. Explicitly configured providers still work. Compare usage on the same number of clips and frames before switching an existing deployment.
